@@ -24,12 +24,13 @@ headers = tornado.httputil.HTTPHeaders({"content-type": "application/json"})
 id_counter = 0
 upload_data_count = 0
 _dict_data = None
+data_types = { "bool": "boolean", "ip4": "ip", "tstxt": "date", "int": "integer", "str": "text", "words": "text", "dict": "keyword", "text": "text"}
 
 
 
 def delete_index(idx_name):
     try:
-        url = "%s/%s?refresh=true" % (tornado.options.options.es_url, idx_name)
+        url = "%s/%s" % (tornado.options.options.es_url, idx_name)
         request = tornado.httpclient.HTTPRequest(url, headers=headers, method="DELETE", request_timeout=240, auth_username=tornado.options.options.username, auth_password=tornado.options.options.password, validate_cert=tornado.options.options.validate_cert)
         response = tornado.httpclient.HTTPClient().fetch(request)
         logging.info('Deleting index  "%s" done   %s' % (idx_name, response.body))
@@ -37,14 +38,21 @@ def delete_index(idx_name):
         pass
 
 
-def create_index(idx_name):
+def create_index(idx_name, format):
     schema = {
         "settings": {
             "number_of_shards":   tornado.options.options.num_of_shards,
             "number_of_replicas": tornado.options.options.num_of_replicas
         },
-        "refresh": True
+        "mappings": {
+            "dynamic": False,
+            "properties": {}
+        }
     }
+    for f in format:
+        split_f = f.split(":")
+        split_f[1] = {"type": data_types[split_f[1]]}
+        schema["mappings"]["properties"][split_f[0]] = split_f[1]
 
     body = json.dumps(schema)
     url = "%s/%s" % (tornado.options.options.es_url, idx_name)
@@ -125,10 +133,7 @@ def get_data_for_format(format):
 
     elif field_type == "dict":
         global _dict_data
-        min = 2 if len(split_f) < 3 else int(split_f[2])
-        max = min + 8 if len(split_f) < 4 else int(split_f[3])
-        count = generate_count(min, max)
-        return_val = " ".join([random.choice(_dict_data).strip() for _ in range(count)])
+        return_val = random.choice(_dict_data).rstrip()
 
     elif field_type == "text":
         text = ["text1", "text2", "text3"] if len(split_f) < 3 else split_f[2].split("-")
@@ -193,15 +198,6 @@ def generate_test_data():
 
     global upload_data_count
 
-    if tornado.options.options.force_init_index:
-        delete_index(tornado.options.options.index_name)
-
-    create_index(tornado.options.options.index_name)
-
-    # todo: query what refresh is set to, then restore later
-    if tornado.options.options.set_refresh:
-        set_index_refresh("-1")
-
     if tornado.options.options.out_file:
         out_file = open(tornado.options.options.out_file, "w")
     else:
@@ -218,6 +214,15 @@ def generate_test_data():
         logging.error('invalid format')
         exit(1)
 
+    if tornado.options.options.force_init_index:
+        delete_index(tornado.options.options.index_name)
+
+    create_index(tornado.options.options.index_name, format)
+
+    # todo: query what refresh is set to, then restore later
+    if tornado.options.options.set_refresh:
+        set_index_refresh("-1")
+
     ts_start = int(time.time())
     upload_data_txt = ""
 
@@ -230,8 +235,7 @@ def generate_test_data():
         if out_file:
             out_file.write("%s\n" % json.dumps(item))
 
-        cmd = {'index': {'_index': tornado.options.options.index_name,
-                         '_type': tornado.options.options.index_type}}
+        cmd = {'index': {'_index': tornado.options.options.index_name}}
         if '_id' in item:
             cmd['index']['_id'] = item['_id']
 
@@ -275,7 +279,7 @@ if __name__ == '__main__':
     tornado.options.define("dict_file", type=str, default=None, help="Name of dictionary file to use")
     tornado.options.define("username", type=str, default=None, help="Username for elasticsearch")
     tornado.options.define("password", type=str, default=None, help="Password for elasticsearch")
-    tornado.options.define("validate_cert", type=bool, default=True, help="SSL validate_cert for requests. Use false for self-signed certificates.")
+    tornado.options.define("validate_cert", type=bool, default=False, help="SSL validate_cert for requests.")
     tornado.options.parse_command_line()
 
     tornado.ioloop.IOLoop.instance().run_sync(generate_test_data)
